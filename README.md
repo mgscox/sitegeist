@@ -125,7 +125,9 @@ Full list of changes: `CHANGELOG.md`.
 
 ## Development
 
-Clone this repo plus its sibling dependencies into the same parent directory:
+Clone this repo plus its sibling dependencies into the same parent directory. Use
+pi-mono `v0.60.0`, matching this fork's lockfile; current upstream uses a different
+package layout. Downloading Sitegeist alone does not include these dependencies:
 
 ```
 parent/
@@ -134,9 +136,12 @@ parent/
   sitegeist/         # this repo
 ```
 
-Install dependencies in each repo:
+Clone the missing siblings, then install dependencies in each repo:
 
 ```bash
+git clone https://github.com/badlogic/mini-lit.git ../mini-lit
+git clone --branch v0.60.0 --depth 1 https://github.com/badlogic/pi-mono.git ../pi-mono
+git -C ../pi-mono apply ../sitegeist/scripts/pi-mono-sitegeist.patch
 (cd ../mini-lit && npm install)
 (cd ../pi-mono && npm install)
 npm install
@@ -149,8 +154,10 @@ Start all dev watchers (mini-lit, pi-mono, sitegeist extension, marketing site):
 ./dev.sh
 ```
 
-This fork needs one addition in `../pi-mono/packages/ai/src/models.ts` that upstream pi-ai
-does not have yet (runtime model discovery registers into its model registry):
+The compatibility patch above supplies the fork-specific APIs: runtime model
+discovery, prompt recall, slash-command suggestions, thinking controls in the model
+picker, and optional omission of max-token parameters. Apply it once to a clean
+`v0.60.0` checkout before compiling. The model-registry additions are:
 
 ```ts
 export function registerModels(provider: string, models: Model<Api>[]): void {
@@ -183,7 +190,10 @@ and `AgentInterface.ts`; the sitegeist side only sets `agentInterface.historyPro
 Without the watchers, build the sibling declarations once so type checking resolves:
 
 ```bash
+(cd ../mini-lit && npx tsc)
 (cd ../pi-mono/packages/ai && npx tsc -p tsconfig.build.json)
+(cd ../pi-mono/packages/agent && npx tsc -p tsconfig.build.json)
+(cd ../pi-mono/packages/tui && npx tsc -p tsconfig.build.json --target ES2024)
 (cd ../pi-mono/packages/web-ui && npx tsc -p tsconfig.build.json)
 ```
 

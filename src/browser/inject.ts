@@ -175,7 +175,9 @@ const SHIM = `(() => {
 async function cdpInject<T>(tabId: number, code: string, options: InjectOptions): Promise<T> {
 	await ensureBinding(tabId);
 	// `chrome` inside the injected code resolves to the shim; the page's own window.chrome is untouched.
-	const expression = `${SHIM}\n(async () => { const chrome = window.__sitegeistChrome; return await (${code}); })()`;
+	// An IIFE may end with a statement terminator, which cannot appear inside parentheses.
+	const expressionCode = code.trimEnd().replace(/;+$/, "");
+	const expression = `${SHIM}\n(async () => { const chrome = window.__sitegeistChrome; return await (\n${expressionCode}\n); })()`;
 	if (options.executionId) runningExecutions.set(options.executionId, tabId);
 	try {
 		const result = await cdpSend<{

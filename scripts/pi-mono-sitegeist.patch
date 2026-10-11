@@ -1,0 +1,316 @@
+diff --git a/packages/ai/src/models.ts b/packages/ai/src/models.ts
+index 101c83f..824949d 100644
+--- a/packages/ai/src/models.ts
++++ b/packages/ai/src/models.ts
+@@ -25,6 +25,28 @@ export function getModel<TProvider extends KnownProvider, TModelId extends keyof
+ 	return providerModels?.get(modelId as string) as Model<ModelApi<TProvider, TModelId>>;
+ }
+ 
++export function registerModels(provider: string, models: Model<Api>[]): void {
++	const providerModels = new Map<string, Model<Api>>();
++	for (const model of models) providerModels.set(model.id, model);
++	modelRegistry.set(provider, providerModels);
++}
++
++export function resetProviderModels(provider: string): void {
++	const generated = (MODELS as Record<string, Record<string, Model<Api>>>)[provider];
++	if (!generated) {
++		modelRegistry.delete(provider);
++		return;
++	}
++	const providerModels = new Map<string, Model<Api>>();
++	for (const [id, model] of Object.entries(generated)) providerModels.set(id, model);
++	modelRegistry.set(provider, providerModels);
++}
++
++export function getGeneratedModels(provider: string): Model<Api>[] {
++	const generated = (MODELS as Record<string, Record<string, Model<Api>>>)[provider];
++	return generated ? Object.values(generated) : [];
++}
++
+ export function getProviders(): KnownProvider[] {
+ 	return Array.from(modelRegistry.keys()) as KnownProvider[];
+ }
+diff --git a/packages/ai/src/providers/openai-completions.ts b/packages/ai/src/providers/openai-completions.ts
+index bd2ccf2..5f1e561 100644
+--- a/packages/ai/src/providers/openai-completions.ts
++++ b/packages/ai/src/providers/openai-completions.ts
+@@ -379,7 +379,7 @@ function buildParams(model: Model<"openai-completions">, context: Context, optio
+ 		params.store = false;
+ 	}
+ 
+-	if (options?.maxTokens) {
++	if (options?.maxTokens && !compat.omitMaxTokens) {
+ 		if (compat.maxTokensField === "max_tokens") {
+ 			(params as any).max_tokens = options.maxTokens;
+ 		} else {
+@@ -813,6 +813,7 @@ function detectCompat(model: Model<"openai-completions">): Required<OpenAIComple
+ 		reasoningEffortMap,
+ 		supportsUsageInStreaming: true,
+ 		maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
++		omitMaxTokens: false,
+ 		requiresToolResultName: false,
+ 		requiresAssistantAfterToolResult: false,
+ 		requiresThinkingAsText: false,
+@@ -838,6 +839,7 @@ function getCompat(model: Model<"openai-completions">): Required<OpenAICompletio
+ 		reasoningEffortMap: model.compat.reasoningEffortMap ?? detected.reasoningEffortMap,
+ 		supportsUsageInStreaming: model.compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
+ 		maxTokensField: model.compat.maxTokensField ?? detected.maxTokensField,
++		omitMaxTokens: model.compat.omitMaxTokens ?? detected.omitMaxTokens,
+ 		requiresToolResultName: model.compat.requiresToolResultName ?? detected.requiresToolResultName,
+ 		requiresAssistantAfterToolResult:
+ 			model.compat.requiresAssistantAfterToolResult ?? detected.requiresAssistantAfterToolResult,
+diff --git a/packages/ai/src/types.ts b/packages/ai/src/types.ts
+index 8631857..0ae9682 100644
+--- a/packages/ai/src/types.ts
++++ b/packages/ai/src/types.ts
+@@ -265,6 +265,8 @@ export interface OpenAICompletionsCompat {
+ 	supportsUsageInStreaming?: boolean;
+ 	/** Which field to use for max tokens. Default: auto-detected from URL. */
+ 	maxTokensField?: "max_completion_tokens" | "max_tokens";
++	/** Omit max token fields for providers that reject both variants. Default: false. */
++	omitMaxTokens?: boolean;
+ 	/** Whether tool results require the `name` field. Default: auto-detected from URL. */
+ 	requiresToolResultName?: boolean;
+ 	/** Whether a user message after tool results requires an assistant message in between. Default: auto-detected from URL. */
+diff --git a/packages/ai/test/openai-completions-tool-result-images.test.ts b/packages/ai/test/openai-completions-tool-result-images.test.ts
+index 5161a13..041f165 100644
+--- a/packages/ai/test/openai-completions-tool-result-images.test.ts
++++ b/packages/ai/test/openai-completions-tool-result-images.test.ts
+@@ -33,6 +33,7 @@ const compat: Required<OpenAICompletionsCompat> = {
+ 	openRouterRouting: {},
+ 	vercelGatewayRouting: {},
+ 	supportsStrictMode: true,
++	omitMaxTokens: false,
+ };
+ 
+ function buildToolResult(toolCallId: string, timestamp: number): ToolResultMessage {
+diff --git a/packages/web-ui/src/components/AgentInterface.ts b/packages/web-ui/src/components/AgentInterface.ts
+index b8f6550..b6f8076 100644
+--- a/packages/web-ui/src/components/AgentInterface.ts
++++ b/packages/web-ui/src/components/AgentInterface.ts
+@@ -2,7 +2,7 @@ import { streamSimple, type ToolResultMessage, type Usage } from "@mariozechner/
+ import { html, LitElement } from "lit";
+ import { customElement, property, query } from "lit/decorators.js";
+ import { ModelSelector } from "../dialogs/ModelSelector.js";
+-import type { MessageEditor } from "./MessageEditor.js";
++import type { MessageEditor, SlashCommandSuggestion } from "./MessageEditor.js";
+ import "./MessageEditor.js";
+ import "./MessageList.js";
+ import "./Messages.js"; // Import for side effects to register the custom elements
+@@ -28,6 +28,8 @@ export class AgentInterface extends LitElement {
+ 	@property({ attribute: false }) onApiKeyRequired?: (provider: string) => Promise<boolean>;
+ 	// Optional callback called before sending a message
+ 	@property({ attribute: false }) onBeforeSend?: () => void | Promise<void>;
++	@property({ attribute: false }) historyProvider?: () => string | undefined;
++	@property({ attribute: false }) slashCommandProvider?: (query: string) => Promise<SlashCommandSuggestion[]>;
+ 	// Optional callback called before executing a tool call - return false to prevent execution
+ 	@property({ attribute: false }) onBeforeToolCall?: (toolName: string, args: any) => boolean | Promise<boolean>;
+ 	// Optional callback called when cost display is clicked
+@@ -368,6 +370,8 @@ export class AgentInterface extends LitElement {
+ 							.showAttachmentButton=${this.enableAttachments}
+ 							.showModelSelector=${this.enableModelSelector}
+ 							.showThinkingSelector=${this.enableThinkingSelector}
++							.historyProvider=${this.historyProvider}
++							.slashCommandProvider=${this.slashCommandProvider}
+ 							.onSend=${(input: string, attachments: Attachment[]) => {
+ 								this.sendMessage(input, attachments);
+ 							}}
+diff --git a/packages/web-ui/src/components/MessageEditor.ts b/packages/web-ui/src/components/MessageEditor.ts
+index f0987c4..f441824 100644
+--- a/packages/web-ui/src/components/MessageEditor.ts
++++ b/packages/web-ui/src/components/MessageEditor.ts
+@@ -11,6 +11,14 @@ import { i18n } from "../utils/i18n.js";
+ import "./AttachmentTile.js";
+ import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
+ 
++export interface SlashCommandSuggestion {
++	id: string;
++	title: string;
++	description?: string;
++	hint?: string;
++	value: string;
++}
++
+ @customElement("message-editor")
+ export class MessageEditor extends LitElement {
+ 	private _value = "";
+@@ -34,6 +42,8 @@ export class MessageEditor extends LitElement {
+ 	@property() showModelSelector = true;
+ 	@property() showThinkingSelector = true;
+ 	@property() onInput?: (value: string) => void;
++	@property() historyProvider?: () => string | undefined;
++	@property() slashCommandProvider?: (query: string) => Promise<SlashCommandSuggestion[]>;
+ 	@property() onSend?: (input: string, attachments: Attachment[]) => void;
+ 	@property() onAbort?: () => void;
+ 	@property() onModelSelect?: () => void;
+@@ -47,6 +57,9 @@ export class MessageEditor extends LitElement {
+ 
+ 	@state() processingFiles = false;
+ 	@state() isDragging = false;
++	@state() private slashSuggestions: SlashCommandSuggestion[] = [];
++	@state() private slashSelectedIndex = 0;
++	private slashRequestId = 0;
+ 	private fileInputRef = createRef<HTMLInputElement>();
+ 
+ 	protected override createRenderRoot(): HTMLElement | DocumentFragment {
+@@ -57,10 +70,56 @@ export class MessageEditor extends LitElement {
+ 		const textarea = e.target as HTMLTextAreaElement;
+ 		this.value = textarea.value;
+ 		this.onInput?.(this.value);
++		void this.updateSlashSuggestions();
+ 	};
+ 
++	private async updateSlashSuggestions() {
++		const requestId = ++this.slashRequestId;
++		const match = this.value.match(/(?:^|\s)\/([^\s]*)$/);
++		if (!match || !this.slashCommandProvider) {
++			this.slashSuggestions = [];
++			return;
++		}
++		try {
++			const suggestions = await this.slashCommandProvider(match[1]);
++			if (requestId === this.slashRequestId) {
++				this.slashSuggestions = suggestions;
++				this.slashSelectedIndex = 0;
++			}
++		} catch (error) {
++			console.error("Failed to load slash command suggestions:", error);
++			if (requestId === this.slashRequestId) this.slashSuggestions = [];
++		}
++	}
++
++	private selectSlashSuggestion(suggestion: SlashCommandSuggestion) {
++		const match = this.value.match(/(?:^|\s)\/([^\s]*)$/);
++		if (!match) return;
++		const start = match.index! + (match[0].startsWith(" ") ? 1 : 0);
++		this.value = `${this.value.slice(0, start)}${suggestion.value} `;
++		this.onInput?.(this.value);
++		this.slashSuggestions = [];
++	}
++
+ 	private handleKeyDown = (e: KeyboardEvent) => {
+-		if (e.key === "Enter" && !e.shiftKey) {
++		if (this.slashSuggestions.length > 0 && e.key === "ArrowDown") {
++			e.preventDefault();
++			this.slashSelectedIndex = (this.slashSelectedIndex + 1) % this.slashSuggestions.length;
++		} else if (this.slashSuggestions.length > 0 && e.key === "ArrowUp") {
++			e.preventDefault();
++			this.slashSelectedIndex =
++				(this.slashSelectedIndex - 1 + this.slashSuggestions.length) % this.slashSuggestions.length;
++		} else if (this.slashSuggestions.length > 0 && e.key === "Enter") {
++			e.preventDefault();
++			this.selectSlashSuggestion(this.slashSuggestions[this.slashSelectedIndex]);
++		} else if (e.key === "ArrowUp" && !this.value) {
++			const previous = this.historyProvider?.();
++			if (previous !== undefined) {
++				e.preventDefault();
++				this.value = previous;
++				this.onInput?.(previous);
++			}
++		} else if (e.key === "Enter" && !e.shiftKey) {
+ 			e.preventDefault();
+ 			if (!this.isStreaming && !this.processingFiles && (this.value.trim() || this.attachments.length > 0)) {
+ 				this.handleSend();
+@@ -274,6 +333,22 @@ export class MessageEditor extends LitElement {
+ 						: ""
+ 				}
+ 
++				${
++					this.slashSuggestions.length > 0
++						? html`
++					<div class="absolute bottom-full left-0 right-0 z-20 mb-2 max-h-56 overflow-y-auto rounded-lg border border-border bg-card shadow-lg">
++						${this.slashSuggestions.map(
++							(suggestion, index) => html`
++							<button type="button" class="flex w-full items-start justify-between gap-3 px-3 py-2 text-left hover:bg-muted ${index === this.slashSelectedIndex ? "bg-muted" : ""}" @mousedown=${(event: MouseEvent) => event.preventDefault()} @click=${() => this.selectSlashSuggestion(suggestion)}>
++								<span class="min-w-0"><span class="block truncate text-sm font-medium">${suggestion.title}</span>${suggestion.description ? html`<span class="block truncate text-xs text-muted-foreground">${suggestion.description}</span>` : ""}</span>
++								${suggestion.hint ? html`<span class="shrink-0 text-xs text-muted-foreground">${suggestion.hint}</span>` : ""}
++							</button>
++						`,
++						)}
++					</div>
++				`
++						: ""
++				}
+ 				<textarea
+ 					class="w-full bg-transparent p-4 text-foreground placeholder-muted-foreground outline-none resize-none overflow-y-auto"
+ 					placeholder=${i18n("Type a message...")}
+diff --git a/packages/web-ui/src/dialogs/ModelSelector.ts b/packages/web-ui/src/dialogs/ModelSelector.ts
+index 192c3c5..865a8be 100644
+--- a/packages/web-ui/src/dialogs/ModelSelector.ts
++++ b/packages/web-ui/src/dialogs/ModelSelector.ts
+@@ -3,6 +3,8 @@ import { Badge } from "@mariozechner/mini-lit/dist/Badge.js";
+ import { Button } from "@mariozechner/mini-lit/dist/Button.js";
+ import { DialogHeader } from "@mariozechner/mini-lit/dist/Dialog.js";
+ import { DialogBase } from "@mariozechner/mini-lit/dist/DialogBase.js";
++import { Select, type SelectOption } from "@mariozechner/mini-lit/dist/Select.js";
++import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
+ import { getModels, getProviders, type Model, modelsAreEqual } from "@mariozechner/pi-ai";
+ import { html, type PropertyValues, type TemplateResult } from "lit";
+ import { customElement, state } from "lit/decorators.js";
+@@ -58,6 +60,7 @@ export class ModelSelector extends DialogBase {
+ 	@state() private customProviderModels: Model<any>[] = [];
+ 
+ 	private onSelectCallback?: (model: Model<any>) => void;
++	private thinkingControl?: { level: ThinkingLevel; onChange: (level: ThinkingLevel) => void };
+ 	private allowedProviders?: Set<string>;
+ 	private scrollContainerRef = createRef<HTMLDivElement>();
+ 	private searchInputRef = createRef<HTMLInputElement>();
+@@ -69,10 +72,12 @@ export class ModelSelector extends DialogBase {
+ 		currentModel: Model<any> | null,
+ 		onSelect: (model: Model<any>) => void,
+ 		allowedProviders?: string[],
++		thinkingControl?: { level: ThinkingLevel; onChange: (level: ThinkingLevel) => void },
+ 	) {
+ 		const selector = new ModelSelector();
+ 		selector.currentModel = currentModel;
+ 		selector.onSelectCallback = onSelect;
++		selector.thinkingControl = thinkingControl;
+ 		if (allowedProviders) {
+ 			selector.allowedProviders = new Set(allowedProviders);
+ 		}
+@@ -294,7 +299,8 @@ export class ModelSelector extends DialogBase {
+ 						}
+ 					},
+ 				})}
+-				<div class="flex gap-2">
++				<div class="flex items-center justify-between gap-2">
++					<div class="flex gap-2">
+ 					${Button({
+ 						variant: this.filterThinking ? "default" : "secondary",
+ 						size: "sm",
+@@ -321,6 +327,34 @@ export class ModelSelector extends DialogBase {
+ 						className: "rounded-full",
+ 						children: html`<span class="inline-flex items-center gap-1">${icon(ImageIcon, "sm")} ${i18n("Vision")}</span>`,
+ 					})}
++					</div>
++					${
++						this.currentModel?.reasoning && this.thinkingControl
++							? Select({
++									value: this.thinkingControl.level,
++									options: (["off", "minimal", "low", "medium", "high"] as ThinkingLevel[]).map((level) => ({
++										value: level,
++										label: i18n(
++											level === "off"
++												? "Off"
++												: level === "minimal"
++													? "Minimal"
++													: level === "low"
++														? "Low"
++														: level === "medium"
++															? "Medium"
++															: "High",
++										),
++										icon: icon(Brain, "sm"),
++									})) as SelectOption[],
++									onChange: (value: string) => this.thinkingControl?.onChange(value as ThinkingLevel),
++									width: "auto",
++									size: "sm",
++									variant: "ghost",
++									fitContent: true,
++								})
++							: ""
++					}
+ 				</div>
+ 			</div>
+ 
