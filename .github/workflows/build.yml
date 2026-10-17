@@ -40,6 +40,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: badlogic/pi-mono
+          # Last revision before upstream removed the web-ui workspace.
+          ref: 559a71683d93ac5ff110e89ca0966bdd2a7eeccd
           path: source/pi-mono
           persist-credentials: false
 
