@@ -4,31 +4,62 @@ on:
   push:
     tags:
       - 'v*'
+  pull_request:
+    paths:
+      - '.github/workflows/build.yml'
+      - 'docs/operations/lan-ci.md'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux, x64, sitegeist]
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: source/sitegeist
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: source/sitegeist
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          repository: badlogic/mini-lit
+          path: source/mini-lit
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          repository: badlogic/pi-mono
+          # Match the compatibility patch and development setup in README.md.
+          ref: v0.60.0
+          path: source/pi-mono
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-
-      - name: Clone mini-lit
-        run: git clone --depth 1 https://github.com/badlogic/mini-lit.git ../mini-lit
-
-      - name: Clone pi-mono
-        run: git clone --depth 1 https://github.com/badlogic/pi-mono.git ../pi-mono
+          node-version: 'lts/*'
+          check-latest: true
 
       - name: Install mini-lit
-        run: cd ../mini-lit && npm install && npm run build
+        working-directory: source/mini-lit
+        run: npm install && npm run build
 
       - name: Install pi-mono
-        run: cd ../pi-mono && npm install && npm run build
+        working-directory: source/pi-mono
+        run: |
+          git apply ../sitegeist/scripts/pi-mono-sitegeist.patch
+          npm install
+          # Sitegeist bundles these packages directly from their TypeScript sources.
 
       - name: Install sitegeist
         run: npm install
@@ -47,6 +78,7 @@ jobs:
         run: echo "version=$(node -p "require('./dist-chrome/manifest.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Extract changelog
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         run: |
           node -e "
             const fs = require('fs');
@@ -62,6 +94,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
 
       - name: Create release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         run: |
           gh release create ${{ github.ref_name }} sitegeist.zip \
             --title "Sitegeist ${{ steps.version.outputs.version }}" \
