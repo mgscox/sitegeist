@@ -223,6 +223,19 @@ export async function runMcpServer(): Promise<void> {
 		(args) => call("navigate", args),
 	);
 	server.registerTool(
+		"set_viewport",
+		{
+			description:
+				"Resize an agent-owned background tab's desktop viewport in CSS pixels for responsive layout checks. Use 1280x800 to restore the default. Take a fresh screenshot or read_page after resizing.",
+			inputSchema: {
+				tabId,
+				width: z.number().int().min(1).max(4096),
+				height: z.number().int().min(1).max(4096),
+			},
+		},
+		(args) => call("viewport.set", args),
+	);
+	server.registerTool(
 		"screenshot",
 		{
 			description:

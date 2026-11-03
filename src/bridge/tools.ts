@@ -13,10 +13,12 @@ import {
 	enableNetworkCapture,
 	evaluateMain,
 	hover,
+	MAX_VIEWPORT_DIMENSION,
 	pressKey,
 	readConsole,
 	readNetwork,
 	screenshotToCss,
+	setAgentViewport,
 	startScreencast,
 	stopScreencast,
 	typeText,
@@ -163,7 +165,7 @@ export const handlers: Record<string, Handler> = {
 		const url = str(params, "url");
 		if (url) await ctx.checkUrl(url);
 		const tab = await ctx.session.createTab(url);
-		const ready = url ? await waitForLoad(tab.id!, 20000) : true;
+		const ready = url ? await waitForLoad(tab.id!, 20000, { url }) : true;
 		return tabSummary(tab.id!, !ready);
 	},
 
@@ -191,11 +193,13 @@ export const handlers: Record<string, Handler> = {
 	navigate: async (ctx, params) => {
 		const url = requireStr(params, "url");
 		const history = url === "back" || url === "forward";
+		const waitUntil = str(params, "waitUntil") === "load" ? "load" : "domcontentloaded";
+		const timeoutMs = num(params, "timeoutMs") ?? 20000;
 		if (!history) await ctx.checkUrl(url);
 		// The first navigate of a session opens its tab straight on the URL (no blank tab).
 		if (!history && num(params, "tabId") === undefined && !(await ctx.session.currentTab())) {
 			const tab = await ctx.session.createTab(url);
-			const ready = await waitForLoad(tab.id!, num(params, "timeoutMs") ?? 20000);
+			const ready = await waitForLoad(tab.id!, timeoutMs, { url, waitUntil });
 			return tabSummary(tab.id!, !ready);
 		}
 		const tabId = await resolveTab(ctx, params, false);
@@ -203,11 +207,26 @@ export const handlers: Record<string, Handler> = {
 		if (url === "back") timedOut = !(await goBack(tabId));
 		else if (url === "forward") timedOut = !(await goForward(tabId));
 		else {
-			const waitUntil = str(params, "waitUntil") === "load" ? "load" : "domcontentloaded";
-			timedOut = (await navigateTabDetailed(tabId, url, { waitUntil, timeoutMs: num(params, "timeoutMs") ?? 20000 }))
-				.timedOut;
+			timedOut = (await navigateTabDetailed(tabId, url, { waitUntil, timeoutMs })).timedOut;
 		}
 		return tabSummary(tabId, timedOut);
+	},
+
+	"viewport.set": async (ctx, params) => {
+		const { width, height } = params;
+		if (
+			typeof width !== "number" ||
+			typeof height !== "number" ||
+			!Number.isInteger(width) ||
+			!Number.isInteger(height) ||
+			Math.min(width, height) < 1 ||
+			Math.max(width, height) > MAX_VIEWPORT_DIMENSION
+		) {
+			throw new BridgeError(ERR.BAD_PARAMS, `width and height must be integers from 1 to ${MAX_VIEWPORT_DIMENSION}`);
+		}
+		const tabId = await resolveTab(ctx, params, false);
+		await setAgentViewport(tabId, { width, height });
+		return { tabId, width, height };
 	},
 
 	screenshot: async (ctx, params) => {

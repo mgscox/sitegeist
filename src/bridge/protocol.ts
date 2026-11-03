@@ -144,6 +144,7 @@ export const BRIDGE_METHODS = [
 	"tabs.select",
 	"tabs.show",
 	"navigate",
+	"viewport.set",
 	"screenshot",
 	"screencast.start",
 	"screencast.stop",

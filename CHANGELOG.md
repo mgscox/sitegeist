@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- The bridge and MCP server can resize an agent-owned background tab for responsive layout checks (`viewport.set` and `set_viewport`).
 - `actions` bridge method and MCP tool: up to 40 input steps (press, click, drag, type, hover, scroll, wait) in one call with an optional closing screenshot. A canvas flowchart (two shapes, labels, bound arrow) is one call instead of 60 to 120 model turns.
 - `sitegeist debug` lists the active tab per window and records foreground-guard decisions; `bridge.activate` puts a tab back in front (dev aid after a focus mishap).
 - `tabs.context` flags tabs that sit outside the session's group (`inGroup: false`).
@@ -21,6 +22,7 @@
 - Removed upstream working notes from the repository root (`db.md`, `gmail.md`, `plan.md`).
 
 ### Fixed
+- Report Chromium navigation failures when opening the first tab or an additional tab, including failures that occur before the tab is added to its group.
 - Accept semicolon-terminated overlay scripts in the debugger injection fallback, preventing overlay creation and removal syntax errors when user scripts are disabled.
 - Declare TypeScript as a development dependency so local checks do not depend on a globally installed compiler. Document the compatible pi-mono version and include its required fork compatibility patch for fresh checkouts.
 - Hidden agent tabs render at a fixed 1280x800 viewport (CDP device-metrics override, dropped while the user looks at the tab and restored when the agent acts on it again), so screenshot pixels, DOM coordinates and click coordinates are the same numbers in every window; models mixed the two scales on wide windows and clicked the wrong spots.

@@ -63,7 +63,11 @@ mode to "allow any site" there. pi: set `SITEGEIST_AUTO_ALLOW=1` to auto-approve
 
 ## MCP tools
 
-`tabs_context`, `tabs_create`, `tabs_close`, `tabs_select`, `tabs_show`, `navigate`,
+`tabs_context`, `tabs_create`, `tabs_close`, `tabs_select`, `tabs_show`, `navigate`, `set_viewport`,
 `screenshot`, `read_page`, `get_page_text`, `get_page_html`, `find`, `click`, `hover`,
 `type`, `press`, `fill`, `scroll`, `drag`, `run_js`, `wait`, `read_console`,
 `read_network`. `tabs_show` is the only tool that changes what the user sees.
+
+Use `set_viewport` with a width and height in CSS pixels on an agent-owned background
+tab. For example, set 1024×640, then take a new screenshot or call `read_page`. Use
+1280×800 to restore the default.
