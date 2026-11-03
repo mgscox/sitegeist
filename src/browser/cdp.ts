@@ -44,6 +44,7 @@ function installListeners(): void {
 	chrome.tabs.onRemoved.addListener((tabId) => {
 		attachedTabs.delete(tabId);
 		viewportTabs.delete(tabId);
+		customViewports.delete(tabId);
 		bannedTabs.delete(tabId);
 	});
 }
@@ -79,7 +80,7 @@ export async function ensureAttached(tabId: number): Promise<void> {
 
 // ---- Agent viewport ------------------------------------------------------------
 //
-// Background agent tabs render at a fixed 1280x800 CSS viewport, whatever the size of
+// Background agent tabs default to a 1280x800 CSS viewport, whatever the size of
 // the window they live in. Screenshots are then 1:1 with page coordinates, so what a
 // model reads off a screenshot, from getBoundingClientRect(), or from a click result
 // are the same numbers, and layouts do not change between machines and windows. The
@@ -87,29 +88,58 @@ export async function ensureAttached(tabId: number): Promise<void> {
 // and comes back the next time an agent acts on it while it is hidden.
 
 export const AGENT_VIEWPORT = { width: 1280, height: 800 };
+export const MAX_VIEWPORT_DIMENSION = 4096;
+type Viewport = typeof AGENT_VIEWPORT;
 const viewportTabs = new Set<number>();
+const customViewports = new Map<number, Viewport>();
+const viewportUpdates = new Map<number, Promise<void>>();
 
-async function ensureAgentViewport(tabId: number): Promise<void> {
-	if (viewportTabs.has(tabId)) return;
-	const tab = await chrome.tabs.get(tabId).catch(() => undefined);
-	if (!tab || tab.active) return;
+/** Keep a resize and a user activation from racing their CDP commands. */
+async function updateViewport(tabId: number, update: () => Promise<void>): Promise<void> {
+	const pending = (viewportUpdates.get(tabId) ?? Promise.resolve()).catch(() => undefined).then(update);
+	viewportUpdates.set(tabId, pending);
 	try {
-		await send(tabId, "Emulation.setDeviceMetricsOverride", {
-			width: AGENT_VIEWPORT.width,
-			height: AGENT_VIEWPORT.height,
-			deviceScaleFactor: 0,
-			mobile: false,
-		});
-		viewportTabs.add(tabId);
-	} catch {
-		/* not attachable right now; the next call retries */
+		await pending;
+	} finally {
+		if (viewportUpdates.get(tabId) === pending) viewportUpdates.delete(tabId);
 	}
 }
 
+async function applyViewport(tabId: number, viewport: Viewport): Promise<void> {
+	await send(tabId, "Emulation.setDeviceMetricsOverride", {
+		...viewport,
+		deviceScaleFactor: 0,
+		mobile: false,
+	});
+	viewportTabs.add(tabId);
+}
+
+function ensureAgentViewport(tabId: number): Promise<void> {
+	return updateViewport(tabId, async () => {
+		if (viewportTabs.has(tabId)) return;
+		const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+		if (!tab || tab.active) return;
+		await applyViewport(tabId, customViewports.get(tabId) ?? AGENT_VIEWPORT).catch(() => undefined);
+	});
+}
+
+export async function setAgentViewport(tabId: number, viewport: Viewport): Promise<void> {
+	await ensureAttached(tabId);
+	await updateViewport(tabId, async () => {
+		if ((await chrome.tabs.get(tabId)).active) {
+			throw new Error("Cannot resize the active tab. Switch to another tab in its window first.");
+		}
+		await applyViewport(tabId, viewport);
+		customViewports.set(tabId, viewport);
+	});
+}
+
 /** Give the tab its real size back (the user is about to see it, or the agent let go). */
-export async function releaseAgentViewport(tabId: number): Promise<void> {
-	if (!viewportTabs.delete(tabId)) return;
-	await send(tabId, "Emulation.clearDeviceMetricsOverride").catch(() => undefined);
+export function releaseAgentViewport(tabId: number): Promise<void> {
+	return updateViewport(tabId, async () => {
+		if (!viewportTabs.delete(tabId)) return;
+		await send(tabId, "Emulation.clearDeviceMetricsOverride").catch(() => undefined);
+	});
 }
 
 /** Detach the debugger. A tab that is being screencast keeps it unless `force`:
@@ -117,13 +147,12 @@ export async function releaseAgentViewport(tabId: number): Promise<void> {
 export async function detachTab(tabId: number, force = false): Promise<void> {
 	if (!force && screencasts.has(tabId)) return;
 	if (force) await stopScreencast(tabId).catch(() => undefined);
-	attachedTabs.delete(tabId);
-	viewportTabs.delete(tabId);
-	try {
-		await chrome.debugger.detach({ tabId });
-	} catch {
-		/* not attached or tab gone */
-	}
+	await updateViewport(tabId, async () => {
+		attachedTabs.delete(tabId);
+		viewportTabs.delete(tabId);
+		if (force) customViewports.delete(tabId);
+		await chrome.debugger.detach({ tabId }).catch(() => undefined);
+	});
 }
 
 export async function cdpSend<T = unknown>(

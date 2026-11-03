@@ -89,31 +89,46 @@ export async function navigateTabDetailed(
 	});
 }
 
-/** Wait for the top frame of a tab to be ready (DOMContentLoaded), bounded. False on timeout. */
-export function waitForLoad(tabId: number, timeoutMs = 15000): Promise<boolean> {
-	return new Promise((resolve) => {
-		let ok = true;
-		const done = () => {
-			chrome.webNavigation.onCompleted.removeListener(listener);
-			chrome.webNavigation.onDOMContentLoaded.removeListener(listener);
+/** Wait for an already-started navigation. False on timeout. */
+export function waitForLoad(
+	tabId: number,
+	timeoutMs = 15000,
+	{ url, waitUntil }: { url?: string; waitUntil?: NavigateOptions["waitUntil"] } = {},
+): Promise<boolean> {
+	return new Promise((resolve, reject) => {
+		const nav = chrome.webNavigation;
+		const finish = (complete: boolean, error?: Error) => {
+			nav.onCompleted.removeListener(listener);
+			nav.onDOMContentLoaded.removeListener(listener);
+			nav.onErrorOccurred.removeListener(onError);
 			clearTimeout(timer);
-			resolve(ok);
+			if (error) reject(error);
+			else resolve(complete);
 		};
 		const listener = (d: chrome.webNavigation.WebNavigationFramedCallbackDetails) => {
-			if (d.tabId === tabId && d.frameId === 0) done();
+			if (d.tabId === tabId && d.frameId === 0) finish(true);
 		};
-		const timer = setTimeout(() => {
-			ok = false;
-			done();
-		}, timeoutMs);
-		chrome.webNavigation.onCompleted.addListener(listener);
-		// DOMContentLoaded is enough to read and act on a page; heavy sites take ages to "complete".
-		chrome.webNavigation.onDOMContentLoaded.addListener(listener);
-		chrome.tabs.get(tabId).then(
-			(tab) => {
-				if (tab.status === "complete" && !tab.pendingUrl) done();
+		const onError = (d: chrome.webNavigation.WebNavigationFramedErrorCallbackDetails) => {
+			if (d.tabId === tabId && d.frameId === 0 && !d.error.includes("ERR_ABORTED")) {
+				finish(false, new Error(`Navigation to ${url} failed: ${d.error}`));
+			}
+		};
+		const timer = setTimeout(() => finish(false), timeoutMs);
+		nav.onCompleted.addListener(listener);
+		if (waitUntil !== "load") nav.onDOMContentLoaded.addListener(listener);
+		if (url) nav.onErrorOccurred.addListener(onError);
+		void chrome.tabs.get(tabId).then(
+			async (tab) => {
+				// Opening the tab and adopting it can outlast a fast navigation failure.
+				// The committed frame retains that failure after the event has been delivered.
+				const frame = url ? await nav.getFrame({ tabId, frameId: 0 }).catch(() => undefined) : undefined;
+				if (frame?.errorOccurred) {
+					finish(false, new Error(`Navigation to ${url} failed: Chromium loaded an error page.`));
+				} else if (tab.status === "complete" && !tab.pendingUrl) {
+					finish(true);
+				}
 			},
-			() => done(),
+			() => finish(true),
 		);
 	});
 }
