@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.1.9] - 2026-11-03
+
 ### Added
 - The bridge and MCP server can resize an agent-owned background tab for responsive layout checks (`viewport.set` and `set_viewport`).
 - `actions` bridge method and MCP tool: up to 40 input steps (press, click, drag, type, hover, scroll, wait) in one call with an optional closing screenshot. A canvas flowchart (two shapes, labels, bound arrow) is one call instead of 60 to 120 model turns.
