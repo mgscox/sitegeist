@@ -31,13 +31,18 @@ DATE=$(date +%Y-%m-%d)
 
 echo "Bumping version: $CURRENT -> $NEW_VERSION"
 
-# Update manifest
-node -e "
-const fs = require('fs');
-const manifest = JSON.parse(fs.readFileSync('$MANIFEST', 'utf8'));
-manifest.version = '$NEW_VERSION';
-fs.writeFileSync('$MANIFEST', JSON.stringify(manifest, null, '\t') + '\n');
-"
+# Update package metadata and the extension manifest together.
+node --input-type=module - "$NEW_VERSION" <<'NODE'
+import { readFileSync, writeFileSync } from 'node:fs';
+
+const version = process.argv[2];
+for (const path of ['static/manifest.chrome.json', 'package.json', 'package-lock.json']) {
+    const metadata = JSON.parse(readFileSync(path, 'utf8'));
+    metadata.version = version;
+    if (path === 'package-lock.json') metadata.packages[''].version = version;
+    writeFileSync(path, JSON.stringify(metadata, null, '\t') + '\n');
+}
+NODE
 
 # Update CHANGELOG: replace [Unreleased] with version, add new [Unreleased]
 node -e "
@@ -52,7 +57,7 @@ echo "Running checks..."
 ./check.sh
 
 # Commit, tag, push
-git add "$MANIFEST" CHANGELOG.md
+git add "$MANIFEST" package.json package-lock.json CHANGELOG.md
 git commit -m "Release v$NEW_VERSION"
 git tag "$TAG"
 git push origin main
